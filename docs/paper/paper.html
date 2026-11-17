@@ -1,0 +1,102 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Ball possession from tracking: a hold-and-dead-ball pipeline</title>
+<style>
+@page{size:A4;margin:18mm 16mm}
+body{font-family:Georgia,'Times New Roman',serif;font-size:10.5pt;line-height:1.42;color:#1a1a1a}
+h1{font-size:20pt;margin:0 0 4px;color:#0b3d91}h2{font-size:13.5pt;color:#0b3d91;margin:18px 0 4px;border-bottom:1px solid #d5dbe8}
+h3{font-size:11pt;margin:12px 0 2px}.meta{color:#666;font-size:9.5pt;margin-bottom:10px}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:9.5pt}th,td{border:1px solid #ccd;padding:3px 6px;text-align:left;vertical-align:top}th{background:#e9eef8}
+figure{margin:10px 0;text-align:center;page-break-inside:avoid}figure img{max-width:100%;max-height:78mm}figcaption{font-size:9pt;color:#555;margin-top:2px}
+code,pre{font-family:Menlo,monospace;font-size:8.6pt;background:#f3f4f7}pre{padding:6px 8px;overflow:hidden;white-space:pre-wrap}
+.box{border-left:4px solid #c0392b;background:#fbeeee;padding:6px 10px;margin:10px 0}.ok{border-left-color:#2e8b57;background:#edf7f1}
+</style></head><body>
+<h1>Ball possession from tracking: controlled-ball evidence, hold and dead ball</h1>
+<div class="meta">Prompt-ly &amp; Furious · Abdullah Musharaf, Muhammad Ahmad Shahzad · <a href="https://github.com/abdullah-azeemi/mtah2027-ball-possession">github.com/abdullah-azeemi/mtah2027-ball-possession</a> · More than a Hack 2027, Phase 1 · version of 2026-11-17</div>
+
+<h2>Abstract</h2>
+<p>We label every frame of FC Barcelona vs Athletic Club as home possession (<b>H</b>), away possession (<b>A</b>), dead ball (<b>D</b>) or not scored (<b>X</b>), using only the tactical tracking. The pipeline has no learned component: a frame counts as evidence only when <b>exactly one team has a tracked player within 1.5 m of the ball and the ball is not in flight</b>, a centred majority vote over +/-60 frames turns that into possessions, a hold keeps the last possession through short stretches with no controlled evidence, and <b>D</b> is written on long stoppages, on long ball gaps and while the ball is out of play. The ball is missing on 40.7% of scored frames, and a manual look at ten long gaps showed dead ball in all ten, which turned the main design decision. We reproduced the organisers' baseline exactly, tested a neural ball-recovery model and a Viterbi segmentation and dropped both, and we state plainly that <b>the full-match score of our file is unknown</b>; the public 5-minute check (17 possessions) gives spellF1 0.55, with a wide interval. The evidence rule was tested, pre-registered, on two other matches and beat the reference's nearest-player rule on both.</p>
+
+<h2>1. The task and the data</h2>
+<p>For each of 199,319 video frames (25 Hz) the answer is H, A, D or X. Ranking is by <b>spellF1</b>: possessions are runs of H or A, matched to the true ones by interval overlap (IoU 0.3 to 0.7); a run of D or X separates two possessions. <b>macroF1</b> (per-frame F1 over H, A, D) breaks ties. The organisers' reference, a 4 s vote over the nearest player, has a published full-match spellF1 of 0.2433 and macroF1 of 0.6724.</p>
+<p>The tracking has 46 anonymous slots per frame with normalised coordinates (pitch 105.3 x 68 m), a speed value, and the ball, which is often missing. The team of each slot comes from the metadata. Line <i>i</i> of the file is video frame <i>i</i>. Teams swap ends at half-time. The match data is licensed for the competition only, so this paper contains <b>no real frames and no tracking values</b>; Figure 1 uses made-up positions, and the format below is described with invented numbers.</p>
+<pre>one frame, schematic (invented values):
+slot 1:  x=0.41  y=0.55  speed=3.2     slot 2:  x=0.47  y=0.30  speed=1.1   ...  slot 46: (empty)
+ball:    x=0.55  y=0.46                                  (or empty when not tracked)
+team:    each slot is home or away according to the metadata, not the frame</pre>
+<figure><img src="figures/fig1_frame_rule.png"><figcaption>Fig. 1. The per-frame evidence: a frame votes only when exactly one team has a tracked slot within 1.5 m of the ball. Positions are invented, for illustration only.</figcaption></figure>
+
+<h2>2. Method</h2>
+<table><tr><th>step</th><th>what</th><th>why</th></tr>
+<tr><td>1 evidence</td><td>vote for a team only when <b>exactly one team</b> has a tracked slot within 1.5 m of the ball (metres); contest, loose ball, untracked ball or ball in flight (faster than 7 m/s): no vote</td><td>the challenge's rule that a contested or loose ball keeps the last possession; the reference counted the nearest team at any distance</td></tr>
+<tr><td>2 smooth</td><td>centred majority vote over +/-60 frames; ties keep the previous decided possession</td><td>a touch or deflection shorter than the window should not end a possession; gating removes about half the votes, so the window is wider</td></tr>
+<tr><td>3 hold</td><td>where the window holds no vote, keep the previous vote</td><td>assume possession does not change unseen (short gaps)</td></tr>
+<tr><td>4 stoppages</td><td>D where the 3 s rolling mean of the median slot speed is below 1.0 m/s and the ball is not moving, for at least 5 s; and the second-half frames 110808 to 113741, which the FAQ states are all D</td><td>players stand still in free kicks, corners and after goals</td></tr>
+<tr><td>5 long gaps</td><td>D on every run of 250 or more frames (10 s) with the ball untracked</td><td>a long untracked ball is dead ball (section 4)</td></tr>
+<tr><td>6 out of play</td><td>D from the ball tracked more than 0.5 m beyond a touchline or goal line for 0.4 s, until a restart: the ball back on the pitch at 6 m/s or more, at least 2 s later (60 s at most)</td><td>the ball over a line is out (law 9); a throw or kick is faster than carrying (section 5)</td></tr>
+<tr><td>7 outside</td><td>X outside the two halves</td><td>never scored</td></tr></table>
+<p>There is no full-match ground truth and the public 5 minutes may not be used to tune, so no component is fitted. We wrote the design, the parameters and the decision rule in a work log <i>before</i> each run, and report negative results. We did compare two candidates on the public window before choosing; section 5 says so, and the chosen thresholds sit on a broad plateau rather than at a tuned maximum.</p>
+
+<h2>3. Missing ball: what it is</h2>
+<p>On the 158,857 scored frames the ball is missing on 40.7%, in 150 gaps with a median length of about 10 to 12 s; 99.5% to 99.9% of the missing frames lie in gaps longer than 5 s.</p>
+<figure><img src="figures/fig2_missing_per_minute.png"><figcaption>Fig. 2. Ball missing per minute. Some minutes are missing throughout (minute 32 of each half is a break).</figcaption></figure>
+<figure><img src="figures/fig3_gap_lengths.png"><figcaption>Fig. 3. Gap lengths. Almost every missing frame sits in a gap far longer than a pass.</figcaption></figure>
+<figure><img src="figures/fig4_missing_vs_slots.png"><figcaption>Fig. 4. With 22 slots tracked the ball is missing on 26.6% of frames, with 16 or fewer on 88.9%. So the missingness is not random (not MCAR): it goes with the tracker having a hard time.</figcaption></figure>
+
+<h3>Can the ball be reconstructed?</h3>
+<p>We hid stretches of tracked ball (1, 2, 5, 10 s) and rebuilt them with last position, constant velocity, linear interpolation and a Set Transformer + Bi-LSTM adapted from Kim et al. (KDD 2023, arXiv:2306.08206), direct and residual forms, on a time-ordered split with a clean test block and a protocol written in advance. Linear interpolation was best up to 5 s and the neural model never beat it. Because real gaps are mostly much longer than 10 s, reconstruction would change little.</p>
+<figure><img src="figures/fig5_recovery_error.png"><figcaption>Fig. 5. Mean error of linear interpolation: 0.8, 2.2, 6.3 and about 12 m at 1, 2, 5 and 10 s.</figcaption></figure>
+
+<h2>4. What the long gaps really are</h2>
+<p>We chose ten gaps of at least 10 s, evenly spaced by start frame (rule fixed before looking), and a team member watched each in the tactical video. All ten were dead ball: a goal kick or the keeper holding the ball, a corner being set up, a drinks break, a penalty stoppage, a free kick, a goal celebration, a yellow card and one more stoppage. In none was the ball in play but hidden. Two consequences: a video ball detector would have nothing to find (idea dropped), and holding possession across a long gap is probably wrong, so runs of 10 s or more are written D. The sample is ten gaps and the inspection is a human look at match video, which we disclose in section 8; short gaps were not inspected and may be live play.</p>
+
+<h2>5. Results</h2>
+<p>Rows A to T_E share the same smoothing; the only differences are hold and the D rules. The last row also changes the per-frame evidence (controlled ball, +/-60 vote), so its possession numbers are not an ablation of the same method.</p>
+<table><tr><th>variant</th><th>possessions</th><th>mean (s)</th><th>H</th><th>A</th><th>D</th></tr>
+<tr><td>A reference (smooth50)</td><td>594</td><td>7.2</td><td>38.6%</td><td>29.1%</td><td>32.3%</td></tr>
+<tr><td>B hold only</td><td>517</td><td>12.3</td><td>56.0%</td><td>44.0%</td><td>0%</td></tr>
+<tr><td>C detector only</td><td>559</td><td>7.2</td><td>35.9%</td><td>27.2%</td><td>36.9%</td></tr>
+<tr><td>D hold + detector</td><td>526</td><td>9.6</td><td>44.6%</td><td>34.6%</td><td>20.8%</td></tr>
+<tr><td>E (D + long gaps as D)</td><td>493</td><td>8.0</td><td>35.6%</td><td>26.5%</td><td>37.9%</td></tr>
+<tr><td><b>T_E (E + out of play, previous candidate)</b></td><td><b>493</b></td><td><b>7.4</b></td><td>33.1%</td><td>24.2%</td><td>42.7%</td></tr>
+<tr><td><b>controlled ball + in-flight gate (current candidate)</b></td><td><b>334</b></td><td><b>10.9</b></td><td>34.0%</td><td>23.3%</td><td>42.7%</td></tr></table>
+<p><b>Controlled-ball evidence (current candidate).</b> The reference gives every frame with a tracked ball to the nearest team, however far away that player is, so a ball 8 m from the nearest player is counted as that team's possession. The challenge's own rule says a contested or loose ball keeps the last possession, so the current candidate votes only when exactly one team has a player within 1.5 m of the ball, votes over +/-60 frames, and keeps the previous possession on a tie. Dead-ball rules are unchanged. On the full match this gives 395 possessions instead of 493 and the same 42.7% D. On the public window it predicts 16 possessions against 17 true; spellF1 rises from 0.3905 to 0.5212, team accuracy from 0.862 to 0.886 and fragmentation from 1.29 to 0.86. <b>Tested on other matches.</b> On Metrica's open sample games 1 and 2 (possession from their event data, same dead-ball frames for every method; rule and decision written in advance) spellF1 was 0.521 / 0.488 for nearest player, 0.562 / 0.599 with the 1.5 m gate, and 0.575 / 0.635 when a ball faster than 7 m/s (in flight: a pass or clearance) also casts no vote; that last rule is the submission, with 334 possessions of mean 10.9 s on our match. A nearest-player fallback and a switch-on-reception rule helped one game and hurt the other and were dropped. Keeping the ground truth's live frames and our dead frames scores 1.0000 on the public window, so every D we write on the window is correct; keeping our live labels but the ground truth's dead frames raises spellF1 to 0.5818, so the remaining loss mixes live team attribution with dead-ball recall (0.48, unchanged from T_E).</p>
+<p><b>Out of play, tested on other matches.</b> The rule was fixed before it was run and tested on Metrica's three open sample matches (event data as labels): 29 stretches, frame precision 0.59, just under the 0.6 we had set as the bar. Two of those matches blank the ball when it is out, so they test only false alarms; on the one like ours precision was 0.73 and it found 40% of the tracked dead frames. We adopted it anyway and say so: it is a deviation from our own pre-registration. Two other candidates for the missing ball (a hand-weighted gap scorecard and a logistic regression trained on the sample matches) were built and not submitted; see the repository.</p>
+<figure><img src="figures/fig6_dead_share.png"><figcaption>Fig. 6. D share per minute for T_E: D on the long gaps, the stoppages and while the ball is out of play. The current candidate keeps these dead-ball rules, so its D share is the same.</figcaption></figure>
+<p><b>Scores on the public 5 minutes</b> (official scorer, 1000 bootstrap draws). This window checks that the pipeline reads the data correctly and lets us describe errors; it has 17 possessions, and the intervals below overlap, so it cannot rank two files reliably. We still used the comparison to choose between T_E and the controlled-ball candidate and say so.</p>
+<table><tr><th>file</th><th>macroF1</th><th>spellF1</th><th>spellF1 5 to 95%</th></tr>
+<tr><td>baseline smooth50</td><td>0.6207</td><td>0.3256</td><td>0.21 to 0.45</td></tr>
+<tr><td>baseline smooth125</td><td>0.5812</td><td>0.4242</td><td>.</td></tr>
+<tr><td>ours, E</td><td>0.6613</td><td>0.3707</td><td>0.24 to 0.50</td></tr>
+<tr><td>ours, T_E (previous candidate)</td><td>0.7567</td><td>0.3905</td><td>0.26 to 0.52</td></tr>
+<tr><td>ours, controlled ball without the in-flight gate</td><td>0.7715</td><td>0.5212</td><td>0.36 to 0.68</td></tr>
+<tr><td><b>ours, current candidate</b></td><td><b>0.7766</b></td><td><b>0.5455</b></td><td>0.39 to 0.70</td></tr></table>
+<figure><img src="figures/fig7_public_scores.png"><figcaption>Fig. 7. Public window scores with their bootstrap intervals (red: the submitted file). The intervals overlap.</figcaption></figure>
+<div class="box"><b>Not shown, and not claimed.</b> The full-match score of our file is unknown. The window has almost no long gaps and only one out-of-play stretch, so it does not test the parts that change the most. The 0.2433 floor is a full-match number; we hope to beat it but cannot claim to. This is an estimate-free design with documented reasons, and the public check is encouraging but its interval is wide and overlaps the other candidates'.</div>
+
+<h2>6. What we tried and dropped</h2>
+<table><tr><th>idea</th><th>outcome</th></tr>
+<tr><td>Ungated nearest-player evidence</td><td>the reference counts a frame for the nearest team at any distance, so contests and loose balls cut possessions (25 vs 17 true on the public window); replaced by controlled-ball evidence</td></tr>
+<tr><td>Neural ball recovery</td><td>not better than linear interpolation at any length; real gaps are too long</td></tr>
+<tr><td>Viterbi segmentation, 3 s switch penalty</td><td>151 possessions of mean 33 s over the match, 6 vs 17 true in the public window (spellF1 0.19); not tuned afterwards, dropped</td></tr>
+<tr><td>Own ball detector from video</td><td>dropped after the ten-gap look: the ball is not in play in the long gaps</td></tr>
+<tr><td>Gradient boosting and random forest for the evidence (trained on Metrica sample games, leave one game out)</td><td>tie with the rule when given its answer as an input (spellF1 0.583 / 0.632 and 0.572 / 0.641 against 0.575 / 0.635); without it the forest is clearly worse (0.542 / 0.555, and it fragments). Not adopted; SHAP in Fig. 8</td></tr>
+<tr><td>JEPA or other foundation models</td><td>not used; there is no permitted label set to learn from</td></tr></table>
+
+<p><b>Why rules and not a trained model.</b> We tested learned models on the same independent matches and the same pre-registered rule. They matched our rule when it was one of their inputs and lost without it, and the remaining error is in segmentation (both predict about 240 possessions against 370 true), which a better per-frame classifier does not fix. SHAP (Fig. 8) shows that a forest trained without the rule relies on the nearest distance of each team to the ball and the players within 1.5 m: the quantities our rule uses directly.</p>
+<figure><img src="figures/fig8_shap.png"><figcaption>Fig. 8. Mean |SHAP| of a random forest trained without our rule's answer, on held-out Metrica sample games (public data). Red: the signals our rule uses.</figcaption></figure>
+<h2>7. Limitations</h2>
+<ul><li>No validation signal for the final metric. Every component is reasoned, none measured on the full match.</li>
+<li>Both the T_E and controlled-ball candidates label 42.7% of scored frames D, because dead-ball rules are unchanged. If long gaps contain live play, both lose on those frames.</li>
+<li>Controlled-ball evidence holds the old team when the controlling player is briefly untracked; that is right for a loose ball but wrong if control changed unseen.</li>
+<li>Out of play: a ball tracked beyond a line during live play starts a false stretch, and a ball that goes out and then stays untracked can run to the 60 s cap.</li>
+<li>The stoppage detector finds 92% of corner and 75% of post-goal kick-off stoppages but only 30% to 42% of goal kicks and throw-ins.</li>
+<li>Short missing stretches are held; a real change of possession inside one is missed. A model trained on other matches suggests most gaps of 5 s or more are dead ball.</li>
+<li>Next, with permitted labelled data from other matches: a supervised per-frame model for frames with a missing ball, with time-ordered validation.</li></ul>
+
+<h2>8. Rules, data handling and reproduction</h2>
+<ul><li>No hand-made labels; no event data; the private ground truth was not used. The public 5 minutes were not used for training; they were used as a check, and their score also informed the choice between our two candidates (section 5), which we disclose. The data is not in the repository.</li>
+<li><b>One human inspection:</b> ten long ball gaps were watched in the tactical video to decide what a gap is (section 4). No label was taken from it.</li>
+<li><b>LLM use. [TEAM TO CONFIRM THE WORDING BEFORE SUBMITTING.]</b> The code was developed with Claude Code, a hosted LLM agent. Printed outputs, including some raw tracking lines, a homography row, Smart Tagging XML, rows of the public ground truth and rendered video frames, were returned to the hosted model. The rules state that data extracts must not be made available to a third-party hosted LLM. We state this so the organisers have the full picture and [we have asked / will ask] whether it is compatible with the terms.</li>
+<li><b>Reproduction.</b> <code>pip install -r requirements-submission.txt</code>, data in <code>data/</code>, then <code>python possession/submit.py --out &lt;team_name&gt;.csv</code>. Deterministic, numpy and pandas only. SHA-256 for the development bundle: <code>8409a8920f34f0456d68aefdf47b9640804625173bc02d0ec866a2ca870870e5</code>. The previous T_E candidate is still reproducible with <code>python possession/make_submission.py</code> (SHA-256 <code>fe38ac194ba507cdf8cc3ed4e2da26e907a2e4b65bf006dc7320f66131e5acb9</code>). Full detail: <code>docs/REPRODUCE.md</code>; every finding and its evidence: <code>docs/worklog.md</code>.</li></ul>
+<h2>References</h2>
+<p>Kim, Y. et al., <i>Ball Trajectory Inference from Multi-Agent Sports Contexts Using Set Transformer and Hierarchical Bi-LSTM</i>, KDD 2023, arXiv:2306.08206. Organisers' repository <code>metrica-sports/more-than-a-hack-2027</code> (data description, scorer, baselines). Metrica Sports sample data <code>metrica-sports/sample-data</code> (three open matches; used for testing, not in the labels).</p>
+</body></html>

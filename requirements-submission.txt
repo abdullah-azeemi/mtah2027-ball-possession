@@ -1,0 +1,11 @@
+# Everything needed to regenerate the submission file: python possession/submit.py --out <team_name>.csv
+#
+# The pipeline uses only these two packages. It has no randomness and no learning, so the same data gives
+# the same bytes. It was developed with numpy 2.4.0 (a version PyPI has since yanked) and the output was
+# verified byte for byte identical with numpy 2.4.1 and 2.4.2 in clean virtual environments; 2.4.1 is
+# pinned because it is not yanked. Python 3.14.4 on macOS.
+#
+# The experiments in recovery/ (ball recovery with a neural network) need PyTorch as well; they are NOT
+# part of the submission path and are described in docs/technical_document.md.
+numpy==2.4.1
+pandas==2.3.3
